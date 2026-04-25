@@ -4,8 +4,6 @@ import asyncio
 import logging
 import os
 import re
-from collections import defaultdict
-import time
 
 
 # ====== CONFIG ======
@@ -39,6 +37,7 @@ logger.handlers.clear()
 logger.addHandler(handler)
 
 logging.info("===== Бот запускается =====")
+
 
 # ====== UTILS ======
 def load_words(filename):
@@ -77,88 +76,72 @@ def normalize(text):
     return re.findall(r'\w+', text.lower())
 
 
+def chek_match_words(w1, w2):
+    '''Сравнивает два слова по трислогам'''
+    if (len(w1) <= 3 or len(w2) <= 3) or w1 == w2:
+        return w1 == w2 
+    
+    count_trislogs = 0
+    max_trislogs = len(min([w1, w2], key=len)) - 2
+    
+    for x in range(0, len(min([w1, w2], key=len)) - 2):
+        if w1[0 + x: 3 + x] == w2[0 + x: 3 + x]:
+            count_trislogs += 1
+            
+    if count_trislogs/max_trislogs * 100 >= 50:
+        return True
+    
+    return False
+
+
+def chek_match(t1, t2):
+    '''Показывает процент схожести текстов'''
+    count_match = 0
+    used_words = set()
+
+    for word1 in t1:
+        for word2 in t2:
+            if word2 not in used_words and chek_match_words(word1, word2):
+                count_match += 1
+                used_words.add(word2)
+                break
+
+    # print(t1, t2)
+    print((int(count_match / len(min([t1, t2], key=len)) * 100)))
+    return (int(count_match / len(min([t1, t2], key=len)) * 100)) > 50
+
+
+def check_replay(text1, text2):
+    texts = [normalize(x) for x in [text1, text2]]
+    return chek_match(*texts)
+
+
+# ====== MESSAGE HISTORY ======
 class MessageHistory:
-    def __init__(self, max_per_chat=100, ttl=3600):
-        """
-        max_per_chat — сколько сообщений хранить на чат
-        ttl — время жизни сообщения (в секундах)
-        """
-        self.storage = defaultdict(list)
-        self.max_per_chat = max_per_chat
-        self.ttl = ttl
-
-    def _clean_old(self, chat_id):
-        """Удаляем старые сообщения по TTL"""
-        now = time.time()
-        self.storage[chat_id] = [
-            item for item in self.storage[chat_id]
-            if now - item["time"] < self.ttl
-        ]
-
-    def _similarity(self, words1, words2, important_words):
-        """Jaccard + важные слова"""
-
-        set1 = set(words1)
-        set2 = set(words2)
-
-        if not set1 or not set2:
-            return 0
-
-        intersection = set1 & set2
-        union = set1 | set2
-
-        jaccard = len(intersection) / len(union)
-
-        # важные слова
-        imp1 = set1 & important_words
-        imp2 = set2 & important_words
-
-        if imp1 and imp2:
-            important_score = len(imp1 & imp2) / len(imp1 | imp2)
-        else:
-            important_score = 0
-
-        return jaccard, important_score
-
-    def is_duplicate(self, chat_id, text, important_words):
-        """
-        Проверяет, является ли сообщение дубликатом
-        """
-
-        self._clean_old(chat_id)
-
-        words = normalize(text)
-
-        for item in self.storage[chat_id]:
-            jaccard, important_score = self._similarity(
-                words,
-                item["words"],
-                important_words
-            )
-
-            # 🔥 ГЛАВНАЯ ЛОГИКА
-            if jaccard > 0.55 or important_score > 0.8:
+    def __init__(self, max_size=100):
+        self.max_size = max_size
+        self.history = []  # список кортежей (chat_id, message_text, timestamp)
+        
+    def add_message(self, chat_id, message_text):
+        """Добавляет сообщение в историю"""
+        if len(self.history) >= self.max_size:
+            self.history.pop(0)  # удаляем самое старое сообщение
+            
+        self.history.append((chat_id, message_text))
+        
+    def is_replay(self, new_chat_id, new_message_text, threshold=50):
+        """Проверяет, является ли сообщение повтором"""
+        for chat_id, old_message_text in self.history:
+            if check_replay(old_message_text, new_message_text):
                 return True
-
         return False
-
-    def add_message(self, chat_id, text):
-        """Добавляем сообщение в историю"""
-
-        words = normalize(text)
-
-        self.storage[chat_id].append({
-            "text": text,
-            "words": words,
-            "time": time.time()
-        })
-
-        # ограничение размера
-        if len(self.storage[chat_id]) > self.max_per_chat:
-            self.storage[chat_id].pop(0)
+        
+    def get_stats(self):
+        """Возвращает статистику истории"""
+        return f"Сообщений в истории: {len(self.history)}/{self.max_size}"
 
 
-message_history = MessageHistory(max_per_chat=100)
+message_history = MessageHistory(max_size=100)
 
 
 @client.on(events.NewMessage)
@@ -202,10 +185,10 @@ async def handle_message(event):
         logging.info("Сообщение отфильтровано минус-словами")
         return
 
-    # --- анти-дубликат ---
-    if message_history.is_duplicate(chat_id, message_text, KEYWORDS):
-        logging.info(f"Дубликат в чате {chat_id}")
+    if message_history.is_replay(chat_id, event.raw_text):
+        logging.info(f"Сообщение из чата {chat_id} похоже на предыдущее - игнорируем")
         return
+
 
     # --- добавляем в историю ---
     message_history.add_message(chat_id, message_text)
