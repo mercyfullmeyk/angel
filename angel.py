@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import re
-from rapidfuzz import fuzz
 from collections import defaultdict
 import time
 
@@ -71,14 +70,6 @@ logging.info(f"Загружено минус-слов: {len(BLOCK_WORDS)}")
 def search_phrase(text, phrase):
     return re.search(re.escape(phrase), text, re.IGNORECASE)
 
-
-def fuzzy_match(word, keywords):
-    for kw in keywords:
-        if abs(len(word) - len(kw)) > 2:
-            continue
-        if fuzz.ratio(word, kw) > 85:
-            return True
-    return False
 # ====== NOT REPLAYS ======
 
 
@@ -169,85 +160,6 @@ class MessageHistory:
 
 message_history = MessageHistory(max_per_chat=100)
 
-# ====== MESSAGE HANDLER ======
-# @client.on(events.NewMessage)
-# async def handle_message(event):
-#     sender = await event.get_sender()
-#     chat = await event.get_chat()
-#     chat_id = event.chat_id
-#     message_text = event.raw_text
-
-#     me = await client.get_me()
-
-#     try:
-#         if chat_id == me.id and message_text.startswith('/'):
-#             await handle_command(event)
-#             return
-        
-#     except AttributeError:
-#         logging.error("Ошибка получения me.id")
-
-#     if chat_id not in KNOWN_CHATS:
-#         title = getattr(chat, 'title', f'ID {chat_id}')
-#         username = getattr(chat, 'username', None)
-#         KNOWN_CHATS[chat_id] = f"@{username}" if username else title
-
-#     logging.info(f"Сообщение из чата {chat_id}: {event.raw_text[:100]}")
-
-#     # Проверяем, не повтор ли это
-    
-#     IMPORTANT_WORDS = set(KEYWORDS)
-
-
-#     # проверка ключевых слов
-
-#     words = normalize(message_text)
-#     # has_keyword = any(word in words for word in KEYWORDS)
-#     # Проверка наличия слов включая опечатки
-#     # быстрый точный матч
-#     has_keyword = any(word in KEYWORDS for word in words)
-#     # если не нашли — используем fuzzy
-#     if not has_keyword:
-#         has_keyword = any(fuzzy_match(word, KEYWORDS) for word in words)
-
-#     # проверка фраз (оставляем как есть, но исправим ниже)
-#     has_phrase = any(search_phrase(message_text, phrase) for phrase in PHRASES)
-
-    
-
-#     if has_keyword or has_phrase:
-#         # проверка минус-слов
-#         has_block = any(bad in words for bad in BLOCK_WORDS)
-
-#         if has_block:
-#             logging.info("Сообщение отфильтровано минус-словами")
-#             return
-        
-#         if message_history.is_duplicate(chat_id, message_text, IMPORTANT_WORDS):
-#             logging.info(f"Сообщение из чата {chat_id} похоже на предыдущее - игнорируем")
-#             return
-
-#         # Добавляем сообщение в историю
-#         message_history.add_message(chat_id, event.raw_text)
-
-#         chat_title = KNOWN_CHATS[chat_id]
-
-#         if getattr(chat, 'username', None):
-#             link = f"https://t.me/{chat.username}/{event.id}"
-#         elif str(chat_id).startswith('-100'):
-#             link = f"https://t.me/c/{str(chat_id)[4:]}/{event.id}"
-#         else:
-#             link = "🔒 приватный чат"
-
-#         result = (
-#             f"📌 *Сообщение в {chat_title}:*\n\n"
-#             f"{event.raw_text}\n\n"
-#             f"🔗 {link}"
-#         )
-
-#         await client.send_message("me", result, parse_mode="markdown")
-#         logging.info(f"Сработало ключевое слово в чате {chat_id}")
-
 
 @client.on(events.NewMessage)
 async def handle_message(event):
@@ -278,8 +190,6 @@ async def handle_message(event):
 
     # --- ключевые слова ---
     has_keyword = any(word in KEYWORDS for word in words)
-    if not has_keyword:
-        has_keyword = any(fuzzy_match(word, KEYWORDS) for word in words)
 
     # --- фразы ---
     has_phrase = any(search_phrase(message_text, phrase) for phrase in PHRASES)
