@@ -5,7 +5,6 @@ import logging
 import os
 import re
 
-
 # ====== CONFIG ======
 api_id = 25987610
 api_hash = '78e9317b91a3b210351c634d11b5ed6f'
@@ -14,6 +13,7 @@ SESSION_NAME = "userbot_session"
 
 KEYWORDS_FILE = "keywords.txt"
 PHRASES_FILE = "phrases.txt"
+BLOCK_PHRASES_FILE = "blockphrases.txt"
 BLOCKWORDS_FILE = "blockwords.txt"
 LOG_FILE = "bot.log"
 
@@ -38,7 +38,6 @@ logger.addHandler(handler)
 
 logging.info("===== Бот запускается =====")
 
-
 # ====== UTILS ======
 def load_words(filename):
     if not os.path.exists(filename):
@@ -58,6 +57,7 @@ client = TelegramClient(SESSION_NAME, api_id, api_hash)
 
 KEYWORDS = set(load_words(KEYWORDS_FILE))
 PHRASES = load_words(PHRASES_FILE)
+BLOCK_PHRASES = load_words(BLOCK_PHRASES_FILE)
 BLOCK_WORDS = set(load_words(BLOCKWORDS_FILE))
 KNOWN_CHATS = {}
 
@@ -74,7 +74,6 @@ def search_phrase(text, phrase):
 
 def normalize(text):
     return re.findall(r'\w+', text.lower())
-
 
 def chek_match_words(w1, w2):
     '''Сравнивает два слова по трислогам'''
@@ -106,8 +105,6 @@ def chek_match(t1, t2):
                 used_words.add(word2)
                 break
 
-    # print(t1, t2)
-    print((int(count_match / len(min([t1, t2], key=len)) * 100)))
     return (int(count_match / len(min([t1, t2], key=len)) * 100)) > 50
 
 
@@ -182,7 +179,13 @@ async def handle_message(event):
 
     # --- минус-слова ---
     if any(word in BLOCK_WORDS for word in words):
-        logging.info("Сообщение отфильтровано минус-словами")
+        l = [word for word in words if word in BLOCK_WORDS]
+        logging.info(f"Сообщение отфильтровано минус-словами {l}")
+        return
+    
+    # --- минус-фразы ---
+    if any(search_phrase(message_text, phrase) for phrase in BLOCK_PHRASES):
+        logging.info("Сообщение отфильтровано минус-фразами")
         return
 
     if message_history.is_replay(chat_id, event.raw_text):
@@ -234,11 +237,29 @@ async def handle_command(event):
         logging.info(f"Добавлены ключевые фразы: {added}")
         await event.reply(f"✅ Добавлено: {', '.join(added)}")
 
+    
+    elif cmd == "/addblockphrase":
+        phrase = {w.strip().lower() for w in args.split(',') if w.strip()}
+        added = phrase - PHRASES
+        BLOCK_PHRASES.update(added)
+        save_words(BLOCK_PHRASES_FILE, BLOCK_PHRASES)
+        logging.info(f"Добавлены минус фразы: {added}")
+        await event.reply(f"✅ Добавлено: {', '.join(added)}")
+    
+
     elif cmd == "/delphrase":
         phrase = {w.strip().lower() for w in args.split(',') if w.strip()}
         removed = phrase & PHRASES
         PHRASES.difference_update(removed)
         save_words(PHRASES_FILE, PHRASES)
+        logging.info(f"Удалены ключевые фразы: {removed}")
+        await event.reply(f"🗑 Удалено: {', '.join(removed)}")
+
+    elif cmd == "/delblockphrase":
+        phrase = {w.strip().lower() for w in args.split(',') if w.strip()}
+        removed = phrase & BLOCK_PHRASES
+        BLOCK_PHRASES.difference_update(removed)
+        save_words(BLOCK_PHRASES_FILE, BLOCK_PHRASES)
         logging.info(f"Удалены ключевые фразы: {removed}")
         await event.reply(f"🗑 Удалено: {', '.join(removed)}")
 
@@ -256,31 +277,17 @@ async def handle_command(event):
         else:
             await event.reply("❗ Список ключевых фраз пуст.")
 
+    elif cmd == "/blockphrases":
+        if KEYWORDS:
+            await event.reply("📃 Минус фразы:\n" + "\n".join(f"• {w}" for w in sorted(BLOCK_PHRASES)))
+        else:
+            await event.reply("❗ Список ключевых фраз пуст.")
+
     elif cmd == "/keywords":
         if KEYWORDS:
             await event.reply("📃 Ключевые слова:\n" + "\n".join(f"• {w}" for w in sorted(KEYWORDS)))
         else:
             await event.reply("❗ Список ключевых слов пуст.")
-
-    elif cmd == "/listchats":
-        if KNOWN_CHATS:
-            text = "📂 Известные чаты:\n\n"
-            for cid, name in KNOWN_CHATS.items():
-                text += f"• {name} — `{cid}`\n"
-            await event.reply(text, parse_mode="markdown")
-        else:
-            await event.reply("❗ Бот пока не видел ни одного чата.")
-
-    elif cmd == "/leavechat":
-        try:
-            cid = int(args.strip())
-            await client(functions.messages.LeaveChatRequest(cid))
-            KNOWN_CHATS.pop(cid, None)
-            logging.info(f"Вышел из чата {cid}")
-            await event.reply(f"👋 Вышел из чата `{cid}`", parse_mode="markdown")
-        except Exception as e:
-            logging.error(f"Ошибка выхода из чата: {e}")
-            await event.reply(f"❌ Ошибка: {e}")
 
     elif cmd == "/addblack":
         words = {w.strip().lower() for w in args.split(',') if w.strip()}
@@ -307,17 +314,21 @@ async def handle_command(event):
     elif cmd == "/help":
         await event.reply(
             "📖 Команды:\n\n"
-            "/addword слова через запятую (добавляет ключевые слова)\n"
-            "/delword слова через запятую (удаляет ключевые слова)\n"
+            "Команды на добавление:\n\n"
+            "/addword (добавляет ключевые слова)\n"
+            "/addphrase (добавляет ключевые фразы)\n"
+            "/addblack (добавляет минус слова)\n"
+            "/addblockphrase (добавляет минус фразы)\n\n"
+            "Команды на удаление:\n\n"
+            "/delword (удаляет ключевые слова)\n"
+            "/delblock (удаляет минус слова)\n"
+            "/delphrase (удаляет ключевые фразы)\n"
+            "/delblockphrase (удаляет минус фразы)\n\n"
+            "Команды на просмотр:\n\n"
             "/keywords (показывает все ключевые слова)\n"
-            "/addphrase (добавляет все ключевые фразы)\n"
-            "/delphrase (удаляет все ключевые фразы)\n"
-            "/phrases (удаляет все ключевые фразы)\n"
-            "/listchats (показывает список чатов)\n"
-            "/leavechat ID (покинуть чат)\n"
-            "/addblack слова через запятую (добавляет минус слова)\n"
-            "/delblock слова через запятую (удаляет минус слова)\n"
             "/blockwords (показывает все минус слова)\n"
+            "/phrases (показывает все ключевые фразы)\n"
+            "/blockphrases (показывает все минус фразы)\n"
         )
         
     else:
